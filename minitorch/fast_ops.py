@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from typing import Callable, Optional
 
     from .tensor import Tensor
-    from .tensor_data import Index, Shape, Storage, Strides
+    from .tensor_data import Shape, Storage, Strides
 
 # TIP: Use `NUMBA_DISABLE_JIT=1 pytest tests/ -m task3_1` to run these tests without JIT.
 
@@ -30,6 +30,7 @@ Fn = TypeVar("Fn")
 
 
 def njit(fn: Fn, **kwargs: Any) -> Fn:
+    """Numba jit function implementation"""
     return _njit(inline="always", **kwargs)(fn)  # type: ignore
 
 
@@ -168,7 +169,25 @@ def tensor_map(
         in_shape: Shape,
         in_strides: Strides,
     ) -> None:
-        raise NotImplementedError("Need to include this file from past assignment.")
+        # TODO: Implement for Task 3.1.
+        direct_mapping = (
+            len(out_strides) != len(in_strides)
+            or (out_strides != in_strides).any()
+            or (out_shape != in_shape).any()
+        )
+        if direct_mapping:
+            for i in prange(len(out)):
+                out_idx = np.empty(MAX_DIMS, np.int32)
+                in_idx = np.empty(MAX_DIMS, np.int32)
+                # compute multidimensional indices
+                to_index(i, out_shape, out_idx)
+                broadcast_index(out_idx, out_shape, in_shape, in_idx)
+                out_posn = index_to_position(out_idx, out_strides)
+                in_posn = index_to_position(in_idx, in_strides)
+                out[out_posn] = fn(in_storage[in_posn])
+            return
+        for i in prange(len(out)):
+            out[i] = fn(in_storage[i])
 
     return njit(_map, parallel=True)  # type: ignore
 
@@ -207,7 +226,32 @@ def tensor_zip(
         b_shape: Shape,
         b_strides: Strides,
     ) -> None:
-        raise NotImplementedError("Need to include this file from past assignment.")
+        # TODO: Implement for Task 3.1.
+        direct_mapping = (
+            len(out_strides) != len(a_strides)
+            or len(out_strides) != len(b_strides)
+            or (out_strides != a_strides).any()
+            or (out_strides != b_strides).any()
+            or (out_shape != a_shape).any()
+            or (out_shape != b_shape).any()
+        )
+        if direct_mapping:
+            for i in prange(len(out)):
+                out_idx = np.empty(MAX_DIMS, np.int32)
+                a_idx = np.empty(MAX_DIMS, np.int32)
+                b_idx = np.empty(MAX_DIMS, np.int32)
+                to_index(i, out_shape, out_idx)
+                broadcast_index(out_idx, out_shape, a_shape, a_idx)
+                broadcast_index(out_idx, out_shape, b_shape, b_idx)
+                a_posn = index_to_position(a_idx, a_strides)
+                b_posn = index_to_position(b_idx, b_strides)
+                a_data = a_storage[a_posn]
+                b_data = b_storage[b_posn]
+                out_posn = index_to_position(out_idx, out_strides)
+                out[out_posn] = fn(a_data, b_data)
+            return
+        for i in prange(len(out)):
+            out[i] = fn(a_storage[i], b_storage[i])
 
     return njit(_zip, parallel=True)  # type: ignore
 
@@ -242,7 +286,19 @@ def tensor_reduce(
         a_strides: Strides,
         reduce_dim: int,
     ) -> None:
-        raise NotImplementedError("Need to include this file from past assignment.")
+        # TODO: Implement for Task 3.1.
+        for i in prange(len(out)):
+            out_index = np.empty(MAX_DIMS, np.int32)
+            dim = a_shape[reduce_dim]
+            to_index(i, out_shape, out_index)
+            out_posn = index_to_position(out_index, out_strides)
+            accum = out[out_posn]
+            posn = index_to_position(out_index, a_strides)
+            ast = a_strides[reduce_dim]
+            for step in range(dim):
+                accum = fn(accum, a_storage[posn])
+                posn += ast
+            out[out_posn] = accum
 
     return njit(_reduce, parallel=True)  # type: ignore
 
@@ -290,10 +346,32 @@ def _tensor_matrix_multiply(
         None : Fills in `out`
 
     """
+    # strides for broadcasting in batch dimensions.
     a_batch_stride = a_strides[0] if a_shape[0] > 1 else 0
     b_batch_stride = b_strides[0] if b_shape[0] > 1 else 0
 
-    raise NotImplementedError("Need to include this file from past assignment.")
+    # TODO: Implement for Task 3.2.
+    # outer loop over the batch dimension of the output.
+    for batch_idx in prange(out_shape[0]):
+        for row_idx in prange(out_shape[1]):
+            for col_idx in prange(out_shape[2]):
+                # calculate initial positions in A and B for the current batch and row/column indices.
+                a_pos = batch_idx * a_batch_stride + row_idx * a_strides[1]
+                b_pos = batch_idx * b_batch_stride + col_idx * b_strides[2]
+
+                # compute the dot product for the current row and column.
+                accumulator = 0.0
+                for k in range(a_shape[2]):  # loop over the common dimension.
+                    accumulator += a_storage[a_pos] * b_storage[b_pos]
+                    a_pos += a_strides[2]
+                    b_pos += b_strides[1]
+
+                output_pos = (
+                    batch_idx * out_strides[0]
+                    + row_idx * out_strides[1]
+                    + col_idx * out_strides[2]
+                )
+                out[output_pos] = accumulator
 
 
 tensor_matrix_multiply = njit(_tensor_matrix_multiply, parallel=True)
